@@ -1,6 +1,7 @@
 import streamlit as st
+import tempfile
+import os
 from google import genai
-from google.genai import types
 
 # Page setup
 st.set_page_config(page_title="GeM Bid Verifier", page_icon="📄", layout="centered")
@@ -8,11 +9,10 @@ st.set_page_config(page_title="GeM Bid Verifier", page_icon="📄", layout="cent
 st.title("📄 GeM Bid Document Auditor")
 st.write("Apni GeM Bid PDF upload karein aur required documents ki audit report paayein.")
 
-# Secrets se Gemini API key uthayega
+# Client Setup
 api_key = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=api_key)
 
-# Client ki Master Profile
 CLIENT_PROFILE = """
 Business Type: Proprietary / Private Limited
 GST: Available & Active
@@ -27,10 +27,18 @@ uploaded_file = st.file_uploader("Upload GeM Bid PDF", type=["pdf"])
 
 if uploaded_file is not None:
     if st.button("Audit Bid Requirements", type="primary"):
-        with st.spinner("Bid document ko scan kiya ja raha hai..."):
+        with st.spinner("Bid document analyze ho raha hai, bas kuch seconds..."):
+            temp_path = None
+            uploaded_cloud_file = None
             try:
-                pdf_bytes = uploaded_file.read()
-                
+                # Temporary local file save
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(uploaded_file.read())
+                    temp_path = tmp.name
+
+                # Upload to Gemini File storage (super fast for large PDFs)
+                uploaded_cloud_file = client.files.upload(file=temp_path)
+
                 system_prompt = f"""
                 Tum ek expert GeM (Government e-Marketplace) Bid Auditor ho.
                 Di gayi Bid PDF ko dhyan se padho aur buyer ki Eligibility, Technical Specifications, aur Buyer Added Bid Specific ATC ko scan karo.
@@ -45,13 +53,11 @@ if uploaded_file is not None:
                 4. **Critical Flags / Risks:** Kya koi aisi condition hai jo client meet nahi kar sakta (Turnover, Experience, etc.)?
                 """
 
+                # Model execution
                 response = client.models.generate_content(
                     model='gemini-3.8-flash',
                     contents=[
-                        types.Part.from_bytes(
-                            data=pdf_bytes,
-                            mime_type='application/pdf',
-                        ),
+                        uploaded_cloud_file,
                         system_prompt
                     ]
                 )
@@ -60,4 +66,9 @@ if uploaded_file is not None:
                 st.markdown(response.text)
 
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error aaya: {e}")
+
+            finally:
+                # Cleanup temporary file
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
